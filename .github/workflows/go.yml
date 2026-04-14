@@ -48,7 +48,7 @@ jobs:
       - name: Build
         run: go build -v ./...
 
-  lint:
+lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
@@ -64,5 +64,6 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: v1.66.0
           args: --timeout=5m
+          install-mode: binary
