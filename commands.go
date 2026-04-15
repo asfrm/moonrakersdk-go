@@ -60,6 +60,7 @@ const (
 	CommandResume  CommandType = "resume"
 	CommandStop    CommandType = "stop"
 	CommandEStop   CommandType = "estop"
+	CommandHome    CommandType = "home"
 	CommandSetFan  CommandType = "set_fan"
 	CommandSetTemp CommandType = "set_temp"
 	CommandGCode   CommandType = "gcode"
@@ -82,6 +83,8 @@ func (s *CommandService) ExecuteCommand(ctx context.Context, cmd PrintCommand) e
 		return s.CancelPrint(ctx)
 	case CommandEStop:
 		return s.emergencyStop(ctx)
+	case CommandHome:
+		return s.Home(ctx)
 	case CommandSetFan:
 		speed, _ := cmd.Params["speed"].(float64)
 		return s.SetFanSpeed(ctx, speed)
@@ -158,4 +161,9 @@ func (s *CommandService) emergencyStop(ctx context.Context) error {
 // EmergencyStop immediately halts the printer (public for facade).
 func (s *CommandService) EmergencyStop(ctx context.Context) error {
 	return s.emergencyStop(ctx)
+}
+
+// Home sends a G28 home command to the printer.
+func (s *CommandService) Home(ctx context.Context) error {
+	return s.runGCode(ctx, "G28")
 }

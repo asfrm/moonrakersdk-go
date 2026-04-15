@@ -107,3 +107,8 @@ func (m *Moonraker) RunGCode(ctx context.Context, script string) error {
 func (m *Moonraker) EmergencyStop(ctx context.Context) error {
 	return m.Commands.EmergencyStop(ctx)
 }
+
+// Home sends a G28 home command to the printer.
+func (m *Moonraker) Home(ctx context.Context) error {
+	return m.Commands.Home(ctx)
+}

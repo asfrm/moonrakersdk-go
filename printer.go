@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 )
 
 // PrinterService provides access to printer-related endpoints.
@@ -63,7 +64,15 @@ func (s *PrinterService) EmergencyStop(ctx context.Context) error {
 }
 
 // GetStatus fetches comprehensive printer status.
+//
+// Uses the direct object-name-as-query-param format
+// (e.g. ?webhooks&print_stats&toolhead) which is required by many
+// Moonraker installations (Creality K1, etc.) that return null for
+// the standard ?objects=webhooks format.
 func (s *PrinterService) GetStatus(ctx context.Context) (*PrinterStatus, error) {
+	status := &PrinterStatus{}
+
+	// Objects to query — using the object name as the query param key.
 	objects := []string{
 		"webhooks",
 		"print_stats",
@@ -71,117 +80,111 @@ func (s *PrinterService) GetStatus(ctx context.Context) (*PrinterStatus, error) 
 		"virtual_sdcard",
 		"toolhead",
 		"fan",
+		"extruder",
+		"heater_bed",
 	}
 
-	result, err := s.QueryObjectsWithParams(ctx, objects)
-	if err != nil {
-		return nil, err
+	params := url.Values{}
+	for _, obj := range objects {
+		params.Set(obj, "")
+	}
+	// Build bare param names (no `=`) — required by many Moonraker
+	// installations (Creality K1, etc.) that reject `key=` format.
+	path := "/printer/objects/query?" + strings.Join(objects, "&")
+
+	var result map[string]interface{}
+	if err := s.client.doRequest(ctx, "GET", path, nil, &result); err != nil {
+		return nil, fmt.Errorf("failed to query printer status: %w", err)
 	}
 
-	status := &PrinterStatus{}
-
-	if webhooks, ok := result.Status["webhooks"]; ok {
-		if wh, ok := webhooks.(map[string]interface{}); ok {
-			if state, ok := wh["state"].(string); ok {
-				status.WebhooksState = state
-			}
+	// Parse webhooks
+	if v, ok := result["webhooks"].(map[string]interface{}); ok {
+		if state, ok := v["state"].(string); ok {
+			status.WebhooksState = state
 		}
 	}
 
-	if printStats, ok := result.Status["print_stats"]; ok {
-		if ps, ok := printStats.(map[string]interface{}); ok {
-			if state, ok := ps["state"].(string); ok {
-				status.PrintState = state
-			}
-			if filename, ok := ps["filename"].(string); ok {
-				status.Filename = filename
-			}
-			if message, ok := ps["message"].(string); ok {
-				status.Message = message
-			}
-			if printDuration, ok := ps["print_duration"].(float64); ok {
-				status.PrintDuration = printDuration
-			}
-			if totalDuration, ok := ps["total_duration"].(float64); ok {
-				status.TotalDuration = totalDuration
-			}
-			if filamentUsed, ok := ps["filament_used"].(float64); ok {
-				status.FilamentUsed = filamentUsed
-			}
+	// Parse print_stats
+	if v, ok := result["print_stats"].(map[string]interface{}); ok {
+		if state, ok := v["state"].(string); ok {
+			status.PrintState = state
+		}
+		if filename, ok := v["filename"].(string); ok {
+			status.Filename = filename
+		}
+		if message, ok := v["message"].(string); ok {
+			status.Message = message
+		}
+		if pd, ok := v["print_duration"].(float64); ok {
+			status.PrintDuration = pd
+		}
+		if td, ok := v["total_duration"].(float64); ok {
+			status.TotalDuration = td
+		}
+		if fu, ok := v["filament_used"].(float64); ok {
+			status.FilamentUsed = fu
 		}
 	}
 
-	if displayStatus, ok := result.Status["display_status"]; ok {
-		if ds, ok := displayStatus.(map[string]interface{}); ok {
-			if progress, ok := ds["progress"].(float64); ok {
-				status.Progress = float32(progress) * 100
-			}
+	// Parse display_status
+	if v, ok := result["display_status"].(map[string]interface{}); ok {
+		if progress, ok := v["progress"].(float64); ok {
+			status.Progress = float32(progress) * 100
 		}
 	}
 
-	if vsd, ok := result.Status["virtual_sdcard"]; ok {
-		if v, ok := vsd.(map[string]interface{}); ok {
-			if progress, ok := v["progress"].(float64); ok {
-				status.VSDProgress = float32(progress)
-			}
-			if isActive, ok := v["is_active"].(bool); ok {
-				status.VSDIsActive = isActive
-			}
+	// Parse virtual_sdcard
+	if v, ok := result["virtual_sdcard"].(map[string]interface{}); ok {
+		if progress, ok := v["progress"].(float64); ok {
+			status.VSDProgress = float32(progress)
+		}
+		if isActive, ok := v["is_active"].(bool); ok {
+			status.VSDIsActive = isActive
 		}
 	}
 
-	if toolhead, ok := result.Status["toolhead"]; ok {
-		if th, ok := toolhead.(map[string]interface{}); ok {
-			if pos, ok := th["position"].([]interface{}); ok && len(pos) >= 3 {
-				status.Position = make([]float64, len(pos))
-				for i, p := range pos {
-					if val, ok := p.(float64); ok {
-						status.Position[i] = val
-					}
-				}
-			}
-			if estTime, ok := th["estimated_print_time"].(float64); ok {
-				status.EstimatedPrintTime = estTime
-			}
-			if printTime, ok := th["print_time"].(float64); ok {
-				status.PrintTime = printTime
-			}
-		}
-	}
-
-	if fan, ok := result.Status["fan"]; ok {
-		if f, ok := fan.(map[string]interface{}); ok {
-			if speed, ok := f["speed"].(float64); ok {
-				status.FanSpeed = float32(speed) * 100
-			}
-		}
-	}
-
-	heaterResult, _ := s.QueryObjectsWithParams(ctx, []string{"heater_bed"})
-	if heaterResult != nil {
-		if heaterBed, ok := heaterResult.Status["heater_bed"]; ok {
-			if hb, ok := heaterBed.(map[string]interface{}); ok {
-				if temp, ok := hb["temperature"].(float64); ok {
-					status.BedTemperature = float32(temp)
-				}
-				if target, ok := hb["target"].(float64); ok {
-					status.BedTarget = float32(target)
+	// Parse toolhead
+	if v, ok := result["toolhead"].(map[string]interface{}); ok {
+		if pos, ok := v["position"].([]interface{}); ok && len(pos) >= 3 {
+			status.Position = make([]float64, len(pos))
+			for i, p := range pos {
+				if val, ok := p.(float64); ok {
+					status.Position[i] = val
 				}
 			}
 		}
+		if est, ok := v["estimated_print_time"].(float64); ok {
+			status.EstimatedPrintTime = est
+		}
+		if pt, ok := v["print_time"].(float64); ok {
+			status.PrintTime = pt
+		}
 	}
 
-	extruderResult, _ := s.QueryObjectsWithParams(ctx, []string{"extruder"})
-	if extruderResult != nil {
-		if extruder, ok := extruderResult.Status["extruder"]; ok {
-			if ex, ok := extruder.(map[string]interface{}); ok {
-				if temp, ok := ex["temperature"].(float64); ok {
-					status.NozzleTemperature = float32(temp)
-				}
-				if target, ok := ex["target"].(float64); ok {
-					status.NozzleTarget = float32(target)
-				}
-			}
+	// Parse fan
+	if v, ok := result["fan"].(map[string]interface{}); ok {
+		if speed, ok := v["speed"].(float64); ok {
+			status.FanSpeed = float32(speed) * 100
+		}
+	}
+
+	// Parse extruder
+	if v, ok := result["extruder"].(map[string]interface{}); ok {
+		if temp, ok := v["temperature"].(float64); ok {
+			status.NozzleTemperature = float32(temp)
+		}
+		if target, ok := v["target"].(float64); ok {
+			status.NozzleTarget = float32(target)
+		}
+	}
+
+	// Parse heater_bed
+	if v, ok := result["heater_bed"].(map[string]interface{}); ok {
+		if temp, ok := v["temperature"].(float64); ok {
+			status.BedTemperature = float32(temp)
+		}
+		if target, ok := v["target"].(float64); ok {
+			status.BedTarget = float32(target)
 		}
 	}
 
